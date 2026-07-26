@@ -14,6 +14,8 @@ type Memory = {
   position: string;
 };
 
+const DEFAULT_REMOTE_API = "https://x8vncko1s0.execute-api.us-east-1.amazonaws.com";
+
 const memories: Memory[] = [
   {
     id: "E-17",
@@ -172,7 +174,7 @@ export default function Home() {
     if (typeof window !== "undefined" && /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname)) {
       return "http://127.0.0.1:8787";
     }
-    return null;
+    return DEFAULT_REMOTE_API;
   }
 
   async function runTrace() {
