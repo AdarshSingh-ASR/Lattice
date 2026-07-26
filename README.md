@@ -16,7 +16,7 @@ can run.
 
 Built for the CockroachDB × AWS Hackathon — Build with Agentic Memory.
 
-## The 90-second demo
+## The two-minute demo
 
 1. A checkout canary causes a 41% gateway failure rate.
 2. Lattice retrieves five semantically similar memories from CockroachDB.
@@ -24,10 +24,14 @@ Built for the CockroachDB × AWS Hackathon — Build with Agentic Memory.
 4. The action gate catches that the memory is unsigned, low-trust, and in
    conflict with a signed production policy. The unsafe plan is blocked.
 5. The operator clicks **Quarantine + replay**.
-6. CockroachDB atomically quarantines the memory for that run, appends an
-   immutable event, creates a trusted branch, and journals the idempotent result.
-7. The replay changes the plan from two unsafe actions to zero, then seals a
-   tamper-evident evidence receipt in versioned S3.
+6. CockroachDB records the original decision's exact HLC and reconstructs its
+   five source memories with a real `AS OF SYSTEM TIME` query.
+7. One serializable transaction quarantines M-211 on that run, blocks its
+   dependent plan, appends lineage, and creates `replay/0427-safe`.
+8. Bedrock replans from the reconstructed snapshot without M-211. Unsafe
+   actions fall from two to zero.
+9. Lambda remains locked until the operator clicks **Approve safe plan**.
+   Approval and evidence receipts are sealed without claiming a side effect ran.
 
 The key product moment is causal: the interface shows exactly which memory
 changed the agent's action and proves that removing it changed the outcome.
@@ -39,7 +43,7 @@ changed the agent's action and proves that removing it changed the outcome.
 | Memories are text chunks | Memories are versioned operational claims |
 | Similarity decides what the model sees | Similarity retrieves; provenance decides what may act |
 | Bad context produces a bad answer | Bad context is quarantined before side effects |
-| Logs show what the model said | A causal trace shows which memory changed the plan |
+| Logs show what the model said | A queryable branch graph proves which memory changed the plan |
 | Corrections overwrite history | Corrections branch and supersede immutable history |
 | Retries can duplicate actions | Every mutation has an idempotency journal |
 
@@ -57,8 +61,10 @@ flowchart LR
     CCLOUD["ccloud CLI<br/>provisioning + health receipts"] --> CRDB
 
     CRDB --> VECTOR["Distributed vector index<br/>workspace-prefixed ANN recall"]
-    CRDB --> JOURNAL["Serializable action journal<br/>idempotent quarantine + branch"]
+    CRDB --> TEMPORAL["MVCC time travel<br/>AS OF SYSTEM TIME"]
+    CRDB --> JOURNAL["Serializable intervention<br/>quarantine + plan + lineage"]
     VECTOR --> AGENT
+    TEMPORAL --> AGENT
     JOURNAL --> AGENT
 ```
 
@@ -67,12 +73,13 @@ flowchart LR
 ```text
 incident signal
     → Bedrock embedding
-    → CockroachDB vector recall
+    → CockroachDB vector recall + cohort anomaly
     → provenance + policy guardrails
     → proposed typed plan
     → conflict?
-        yes → block → branch-scoped quarantine → replay → S3 receipt
-        no  → approval gate → idempotent action journal
+        yes → block → capture HLC → AS OF SYSTEM TIME reconstruction
+            → atomic quarantine branch → Bedrock replay → human gate → S3 receipt
+        no  → human gate → idempotent action journal
 ```
 
 ## Hackathon technology
@@ -81,7 +88,16 @@ incident signal
 
 - **Distributed Vector Indexing** — `memories.embedding VECTOR(1024)` has a
   workspace-prefixed cosine vector index. Operational and semantic memory stay
-  transactionally consistent in the same database.
+  transactionally consistent in the same database. The same index measures
+  agreement with the nearest verified-memory cohort, making semantic poison
+  detection—not only retrieval—load-bearing.
+- **MVCC time travel** — every decision stores
+  `cluster_logical_timestamp()`. Replay embeds that validated HLC in an exact
+  `AS OF SYSTEM TIME` query, reconstructing the memory rows as they existed
+  when the blocked plan was made.
+- **Serializable intervention lineage** — memory intervention, dependent-read
+  state, branch plan, immutable event, and idempotent journal outcome commit in
+  one retry-aware transaction.
 - **CockroachDB Agent Skills** — the Lambda loads exact, attributed snapshots
   of `designing-application-transactions`, `hardening-user-privileges`, and
   `reviewing-cluster-health`. Every trace persists skill receipts, and the
@@ -115,6 +131,9 @@ incident signal
   checked before planning can cross the execution boundary.
 - **Truthful completion.** Lattice never claims an action ran until the
   journal records a completed authoritative result.
+- **Human execution gate.** A separate, idempotent approval transaction unlocks
+  the action envelope; the demo explicitly records that side effects remain
+  unexecuted.
 - **Repeatable isolation.** Quarantine is recorded on the run's verified branch,
   so one judge cannot consume the poisoned memory for everyone else.
 - **Tamper evidence.** Every quarantine receipt includes a SHA-256 content hash

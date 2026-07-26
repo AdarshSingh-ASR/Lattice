@@ -29,12 +29,29 @@ const quarantine = await handler({
 
 assert.equal(quarantine.statusCode, 200, quarantine.body);
 const resolved = JSON.parse(quarantine.body);
-assert.equal(resolved.phase, "verified");
+assert.equal(resolved.phase, "approval_required");
 assert.equal(resolved.branch, "replay/0427-safe");
+assert.equal(resolved.temporalProof.queryMode, "AS OF SYSTEM TIME");
+assert.equal(resolved.temporalProof.reconstructedRows, 5);
 assert.equal(
   resolved.plan.actions.some((action) => /bypass/i.test(action.title)),
   false,
 );
+
+const approval = await handler({
+  rawPath: "/approve",
+  requestContext: { http: { method: "POST" }, requestId: randomUUID() },
+  headers: { "x-idempotency-key": `smoke-approval-${randomUUID()}` },
+  body: JSON.stringify({
+    runId: traced.runId,
+    actor: "qa-operator",
+  }),
+});
+
+assert.equal(approval.statusCode, 200, approval.body);
+const approved = JSON.parse(approval.body);
+assert.equal(approved.phase, "approved");
+assert.equal(approved.sideEffectsExecuted, false);
 
 console.log(
   JSON.stringify({
@@ -42,8 +59,10 @@ console.log(
     runId: traced.runId,
     recalled: traced.memories.length,
     conflicts: traced.conflicts.map((memory) => memory.id),
-    branch: resolved.branch,
+    branch: approved.branch,
     unsafeActions: 0,
+    temporalReplay: resolved.temporalProof.queryMode,
+    approval: approved.phase,
     evidenceHash: resolved.evidence.hash,
   }),
 );

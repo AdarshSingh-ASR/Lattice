@@ -3,10 +3,11 @@ import pg from "pg";
 
 const { Client } = pg;
 
-if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
+const adminUrl = process.env.MIGRATION_DATABASE_URL;
+if (!adminUrl) throw new Error("MIGRATION_DATABASE_URL is required");
 
 const client = new Client({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: adminUrl,
   ssl: { rejectUnauthorized: true },
   application_name: "lattice-privilege-hardening",
 });
@@ -18,7 +19,8 @@ try {
   await client.query("GRANT USAGE ON SCHEMA public TO lattice_runtime");
   await client.query(
     `GRANT SELECT, INSERT, UPDATE, DELETE
-       ON TABLE incidents, memories, agent_runs, memory_reads, memory_events, action_journal
+       ON TABLE incidents, memories, agent_runs, memory_reads, memory_events,
+                memory_interventions, human_approvals, action_journal
        TO lattice_runtime`,
   );
   await client.query("GRANT lattice_runtime TO lattice_app");

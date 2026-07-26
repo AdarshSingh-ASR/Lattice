@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import pg from "pg";
 
@@ -9,10 +9,6 @@ if (!migrationUrl) {
   throw new Error("MIGRATION_DATABASE_URL or DATABASE_URL is required");
 }
 
-const sql = await readFile(
-  path.join(process.cwd(), "migrations", "001_lattice_memory.sql"),
-  "utf8",
-);
 const client = new Client({
   connectionString: migrationUrl,
   ssl: { rejectUnauthorized: true },
@@ -21,7 +17,16 @@ const client = new Client({
 
 await client.connect();
 try {
-  await client.query(sql);
+  const migrationDirectory = path.join(process.cwd(), "migrations");
+  const migrations = (await readdir(migrationDirectory))
+    .filter((file) => file.endsWith(".sql"))
+    .sort();
+
+  for (const migration of migrations) {
+    const sql = await readFile(path.join(migrationDirectory, migration), "utf8");
+    await client.query(sql);
+    console.log(`Applied ${migration}.`);
+  }
   console.log("Lattice memory schema is ready.");
 } finally {
   await client.end();

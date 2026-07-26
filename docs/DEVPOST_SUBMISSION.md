@@ -21,28 +21,32 @@ Lattice is an incident-memory control plane. It retrieves semantically similar
 operational memory, shows the causal path from each memory to the proposed
 plan, and blocks side effects when recall fails provenance or policy checks.
 
-If a memory is unsafe, Lattice can quarantine it and replay the same task on a
-trusted memory branch. The operator sees the before/after plan, the exact
-memory that changed it, required approvals, and an immutable evidence trail.
+If a memory is unsafe, Lattice reconstructs the exact MVCC snapshot that caused
+the decision, quarantines it on a trusted branch, and asks Bedrock to replan.
+The operator sees a Git-style before/after lineage and must approve the safe
+plan before Lambda unlocks execution.
 
 ## How we built it
 
 The product uses a Next.js control-room interface and a typed AWS Lambda agent
 boundary. Amazon Bedrock Nova produces structured incident plans and Titan
 creates 1024-dimensional embeddings. CockroachDB Cloud stores incidents,
-versioned memories, embeddings, retrieval receipts, plans, quarantine events,
-and idempotent action outcomes. Amazon S3 seals encrypted, versioned evidence
-receipts.
+versioned memories, decision HLCs, embeddings, retrieval receipts, plans,
+interventions, approvals, and idempotent outcomes. Amazon S3 seals encrypted,
+versioned evidence receipts.
 
 ## CockroachDB tools used
 
 1. **Distributed Vector Indexing** — workspace-prefixed cosine search retrieves
-   incident memories from a native `VECTOR(1024)` index.
-2. **Agent Skills Repo** — exact snapshots of the transaction design,
+   incident memories from a native `VECTOR(1024)` index and scores each result
+   against its nearest verified-memory cohort for semantic anomaly detection.
+2. **MVCC historical reads** — `cluster_logical_timestamp()` captures the
+   decision instant and `AS OF SYSTEM TIME` reconstructs its exact memory rows.
+3. **Agent Skills Repo** — exact snapshots of the transaction design,
    privilege hardening, and cluster health skills are loaded by the runtime.
    Their guardrails enter the planner context and their invocation receipts
    are persisted per agent run.
-3. **ccloud CLI** — provisions separate SQL identities and generates a
+4. **ccloud CLI** — provisions separate SQL identities and generates a
    machine-readable cluster health assessment.
 
 ## AWS services used
@@ -68,7 +72,9 @@ the action changed.
 ## Accomplishments
 
 - A real distributed CockroachDB vector index, not a mocked retrieval layer
-- Atomic, branch-scoped quarantine + replay with serializable retry handling
+- Exact MVCC decision reconstruction with `AS OF SYSTEM TIME`
+- Atomic intervention lineage with serializable retry handling
+- A visible branch/merge-style decision graph and real human approval gate
 - A least-privilege runtime SQL identity separated from migrations
 - Skill receipts for three CockroachDB Agent Skills on every trace
 - Complete interaction tested on desktop and mobile

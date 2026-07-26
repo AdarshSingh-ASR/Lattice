@@ -9,6 +9,8 @@ flowchart LR
     CCLOUD["ccloud CLI<br/>provisioning + health receipts"] --> CRDB
 
     CRDB --> VECTOR["Distributed vector index<br/>workspace-prefixed ANN recall"]
-    CRDB --> JOURNAL["Serializable action journal<br/>idempotent quarantine + branch"]
+    CRDB --> TEMPORAL["MVCC time travel<br/>exact decision HLC"]
+    CRDB --> JOURNAL["Serializable intervention<br/>quarantine + plan + lineage"]
     VECTOR --> AGENT
+    TEMPORAL --> AGENT
     JOURNAL --> AGENT

@@ -25,6 +25,16 @@ export function stableHash(value) {
 export function inspectMemory(memory, policies = []) {
   const violations = [];
 
+  if (
+    memory.semanticAnomaly >= 0.52 &&
+    (memory.signatureStatus !== "verified" || memory.trustScore < 50)
+  ) {
+    violations.push({
+      id: "SEMANTIC_OUTLIER",
+      reason: `Vector cohort anomaly ${memory.semanticAnomaly.toFixed(2)} exceeds the trusted-memory threshold.`,
+    });
+  }
+
   if (memory.signatureStatus !== "verified") {
     violations.push({
       id: "UNVERIFIED_PROVENANCE",
@@ -65,16 +75,34 @@ export function inspectMemory(memory, policies = []) {
   };
 }
 
-export function buildSafePlan(memories) {
+export function buildSafePlan(memories, modelPlan = null) {
   const usable = memories.filter((memory) => !memory.guardrail?.violations?.length);
   const sourceIds = usable.map((memory) => memory.id);
+  const modelActions = Array.isArray(modelPlan?.actions)
+    ? modelPlan.actions
+        .filter((action) => {
+          const text = `${action.title ?? ""} ${action.mode ?? ""}`;
+          return !FORBIDDEN_PATTERNS.some((rule) => rule.pattern.test(text));
+        })
+        .slice(0, 5)
+        .map((action, index) => ({
+          key: String(action.key ?? `bedrock-action-${index + 1}`),
+          title: String(action.title ?? "Review recovery step"),
+          mode: String(action.mode ?? "read-only"),
+          requiresApproval: Boolean(action.requiresApproval),
+        }))
+    : [];
 
   return {
     version: 2,
     branch: "replay/0427-safe",
-    confidence: 0.96,
+    confidence: Math.max(0.9, Math.min(0.99, Number(modelPlan?.confidence) || 0.96)),
+    summary:
+      modelPlan?.summary ??
+      "Recovered from the exact historical context with quarantined memory excluded.",
+    generatedBy: modelActions.length >= 2 ? "amazon-bedrock-guarded" : "verified-fallback",
     sourceMemoryIds: sourceIds,
-    actions: [
+    actions: modelActions.length >= 2 ? modelActions : [
       {
         key: "freeze-canary",
         title: "Freeze canary at 10%",

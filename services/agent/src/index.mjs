@@ -8,10 +8,12 @@ import {
 import { sealEvidence } from "./evidence.mjs";
 import { embedText, planWithBedrock } from "./providers.mjs";
 import {
+  approveRun,
   createTraceRun,
   getIncident,
   health,
   quarantineAndBranch,
+  reconstructDecisionContext,
   retrieveMemories,
 } from "./repository.mjs";
 import { loadCockroachSkillContext } from "./skills.mjs";
@@ -26,6 +28,11 @@ const quarantineSchema = z.object({
   runId: z.string().uuid(),
   memoryId: z.string().min(1),
   reason: z.string().min(12).max(500),
+});
+
+const approvalSchema = z.object({
+  runId: z.string().uuid(),
+  actor: z.string().min(2).max(100).default("human-operator"),
 });
 
 function response(statusCode, body, extraHeaders = {}) {
@@ -112,6 +119,8 @@ async function trace(event) {
       role: "transactional + semantic system of record",
       isolation: "SERIALIZABLE",
       vectorIndex: "memory_embedding_idx",
+      decisionHlc: run.decision_hlc,
+      decisionWallTime: run.decision_wall_time,
     },
     replayed: run.replayed,
   });
@@ -124,11 +133,33 @@ async function quarantine(event) {
     event.headers?.["X-Idempotency-Key"] ||
     `quarantine:${input.memoryId}`;
 
-  const safePlan = buildSafePlan([
-    { id: "M-184", guardrail: { violations: [] } },
-    { id: "M-176", guardrail: { violations: [] } },
-    { id: "P-07", guardrail: { violations: [] } },
-  ]);
+  const historical = await reconstructDecisionContext(WORKSPACE_ID, input.runId);
+  const incident = await getIncident(WORKSPACE_ID, "INC-0427");
+  const policies = historical.memories.filter((memory) => memory.kind === "policy");
+  const reconstructed = historical.memories.map((memory) => ({
+    ...memory,
+    guardrail: inspectMemory(memory, policies),
+  }));
+  const trustedBranch = reconstructed.filter(
+    (memory) => memory.id !== input.memoryId && memory.guardrail.safe,
+  );
+
+  let replayModelPlan = null;
+  let replayPlanner = "verified-fallback";
+  if (process.env.LATTICE_PLANNER_PROVIDER !== "deterministic") {
+    try {
+      replayModelPlan = await planWithBedrock({
+        incident,
+        memories: trustedBranch,
+        skillGuardrails: (await loadCockroachSkillContext()).prompt,
+        mode: "replay",
+      });
+      replayPlanner = "amazon-bedrock-guarded";
+    } catch {
+      replayPlanner = "verified-fallback";
+    }
+  }
+  const safePlan = buildSafePlan(trustedBranch, replayModelPlan);
 
   const result = await quarantineAndBranch({
     workspaceId: WORKSPACE_ID,
@@ -137,6 +168,8 @@ async function quarantine(event) {
     reason: input.reason,
     safePlan,
     idempotencyKey,
+    temporalProof: historical.proof,
+    replayPlanner,
   });
 
   const evidence = await sealEvidence({
@@ -150,6 +183,36 @@ async function quarantine(event) {
     branch: result.branch,
     plan: result.plan,
     inputHash: result.inputHash,
+    sealedAt: new Date().toISOString(),
+  });
+
+  return response(200, { ...result, evidence });
+}
+
+async function approve(event) {
+  const input = approvalSchema.parse(parseBody(event));
+  const idempotencyKey =
+    event.headers?.["x-idempotency-key"] ||
+    event.headers?.["X-Idempotency-Key"] ||
+    `human-approval:${input.runId}`;
+
+  const result = await approveRun({
+    workspaceId: WORKSPACE_ID,
+    runId: input.runId,
+    actor: input.actor,
+    idempotencyKey,
+  });
+  const evidence = await sealEvidence({
+    version: 1,
+    type: "human-approval",
+    workspaceId: WORKSPACE_ID,
+    incidentId: "INC-0427",
+    runId: input.runId,
+    branch: result.branch,
+    actor: result.actor,
+    planHash: result.planHash,
+    executionGate: result.executionGate,
+    sideEffectsExecuted: result.sideEffectsExecuted,
     sealedAt: new Date().toISOString(),
   });
 
@@ -180,6 +243,7 @@ export async function handler(event) {
     }
     if (method === "POST" && path.endsWith("/trace")) return await trace(event);
     if (method === "POST" && path.endsWith("/quarantine")) return await quarantine(event);
+    if (method === "POST" && path.endsWith("/approve")) return await approve(event);
     return response(404, { error: "route_not_found", path, method });
   } catch (error) {
     console.error(

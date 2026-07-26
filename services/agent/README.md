@@ -5,6 +5,11 @@ It uses Amazon Bedrock for incident planning and Titan embeddings, CockroachDB
 for transactional and semantic memory, and a versioned Amazon S3 bucket for
 immutable evidence receipts.
 
+The decision path is CockroachDB-specific: each run stores an exact HLC from
+`cluster_logical_timestamp()`, replay reconstructs memory with
+`AS OF SYSTEM TIME`, vector-neighbor cohesion contributes to poison detection,
+and intervention plus approval state use retry-safe serializable transactions.
+
 ## Local setup
 
 ```powershell

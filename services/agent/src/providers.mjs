@@ -59,7 +59,12 @@ export async function embedText(text) {
   return payload.embedding;
 }
 
-export async function planWithBedrock({ incident, memories, skillGuardrails }) {
+export async function planWithBedrock({
+  incident,
+  memories,
+  skillGuardrails,
+  mode = "initial",
+}) {
   const modelId = process.env.BEDROCK_MODEL_ID || "amazon.nova-lite-v1:0";
   const prompt = [
     "You are Lattice, an incident-response planner.",
@@ -67,6 +72,9 @@ export async function planWithBedrock({ incident, memories, skillGuardrails }) {
     "Return JSON only with keys: summary, confidence, actions.",
     "Each action needs key, title, mode, requiresApproval, memoryIds.",
     "Never bypass authentication, expand blast radius, or claim an action ran.",
+    mode === "replay"
+      ? "This is a forensic replay. Use only the supplied post-quarantine memory set and require human approval for credential changes."
+      : "This is the original decision reconstruction. Preserve memory citations so the action gate can prove causality.",
     `CockroachDB skill guardrails: ${skillGuardrails}`,
     `Incident: ${JSON.stringify(incident)}`,
     `Retrieved memories: ${JSON.stringify(memories)}`,

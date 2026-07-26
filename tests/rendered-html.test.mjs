@@ -39,6 +39,8 @@ test("server-renders the Lattice control room", async () => {
   assert.match(html, /Run memory trace/);
   assert.match(html, /Unsigned workaround/);
   assert.match(html, /SERIALIZABLE/);
+  assert.match(html, /AS OF SYSTEM TIME/);
+  assert.match(html, /human gate/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Starter Project/i);
 });
 

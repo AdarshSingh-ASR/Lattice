@@ -22,7 +22,9 @@ try {
     `SELECT
        (SELECT count(*) FROM memories) AS memories,
        (SELECT count(*) FROM agent_runs) AS runs,
-       (SELECT count(*) FROM memory_events) AS events`,
+       (SELECT count(*) FROM memory_events) AS events,
+       (SELECT count(*) FROM memory_interventions) AS interventions,
+       (SELECT count(*) FROM human_approvals) AS approvals`,
   );
 
   assert.ok(indexResult.rowCount >= 1);
