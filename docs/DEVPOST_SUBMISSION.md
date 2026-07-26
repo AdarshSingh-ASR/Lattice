@@ -64,7 +64,7 @@ the action changed.
 ## Accomplishments
 
 - A real distributed CockroachDB vector index, not a mocked retrieval layer
-- Atomic quarantine + branch replay with serializable retry handling
+- Atomic, branch-scoped quarantine + replay with serializable retry handling
 - A least-privilege runtime SQL identity separated from migrations
 - Skill receipts for three CockroachDB Agent Skills on every trace
 - Complete interaction tested on desktop and mobile

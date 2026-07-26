@@ -21,8 +21,8 @@ Built for the
 4. The action gate catches that the memory is unsigned, low-trust, and in
    conflict with a signed production policy. The unsafe plan is blocked.
 5. The operator clicks **Quarantine + replay**.
-6. CockroachDB atomically quarantines the memory, appends an immutable event,
-   creates a trusted branch, and journals the idempotent action result.
+6. CockroachDB atomically quarantines the memory for that run, appends an
+   immutable event, creates a trusted branch, and journals the idempotent result.
 7. The replay changes the plan from two unsafe actions to zero, then seals a
    tamper-evident evidence receipt in versioned S3.
 
@@ -68,7 +68,7 @@ incident signal
     → provenance + policy guardrails
     → proposed typed plan
     → conflict?
-        yes → block → quarantine memory → branch → replay → S3 receipt
+        yes → block → branch-scoped quarantine → replay → S3 receipt
         no  → approval gate → idempotent action journal
 ```
 
@@ -112,6 +112,8 @@ incident signal
   checked before planning can cross the execution boundary.
 - **Truthful completion.** Lattice never claims an action ran until the
   journal records a completed authoritative result.
+- **Repeatable isolation.** Quarantine is recorded on the run's verified branch,
+  so one judge cannot consume the poisoned memory for everyone else.
 - **Tamper evidence.** Every quarantine receipt includes a SHA-256 content hash
   and is written to an encrypted, versioned S3 bucket.
 

@@ -148,18 +148,22 @@ export async function quarantineAndBranch({
     );
 
     const memory = await client.query(
-      `UPDATE memories
-          SET status = 'quarantined', quarantined_at = now()
-        WHERE workspace_id = $1 AND id = $2 AND status != 'quarantined'
-      RETURNING id, title, content, provenance`,
+      `SELECT id, title, content, provenance
+         FROM memories
+        WHERE workspace_id = $1 AND id = $2
+        FOR UPDATE`,
       [workspaceId, memoryId],
     );
+
+    if (!memory.rowCount) {
+      throw new Error(`Memory ${memoryId} was not found in workspace ${workspaceId}.`);
+    }
 
     await client.query(
       `INSERT INTO memory_events
         (workspace_id, id, memory_id, event_type, actor, reason, evidence_hash)
        VALUES ($1, $2, $3, 'quarantined', 'lattice-guardian', $4, $5)`,
-      [workspaceId, eventId, memoryId, reason, stableHash(memory.rows[0] ?? { memoryId })],
+      [workspaceId, eventId, memoryId, reason, stableHash(memory.rows[0])],
     );
 
     await client.query(

@@ -34,9 +34,9 @@ Show **BLOCKED** and the immutable trace.
 
 Click **Quarantine + replay**.
 
-“One serializable CockroachDB transaction quarantines the memory, appends an
-immutable event, creates a trusted branch, and journals the idempotency key.
-Then the agent replays the same incident without the poisoned memory.”
+“One serializable CockroachDB transaction quarantines the memory on this run's
+branch, appends an immutable event, and journals the idempotency key. Then the
+agent replays the same incident without the poisoned memory.”
 
 Point to:
 
