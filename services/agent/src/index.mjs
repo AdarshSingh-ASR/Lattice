@@ -20,6 +20,8 @@ import { loadCockroachSkillContext } from "./skills.mjs";
 
 const WORKSPACE_ID = "demo-acme-ops";
 
+class InvalidJsonError extends Error {}
+
 const traceSchema = z.object({
   incidentId: z.string().min(1).default("INC-0427"),
 });
@@ -55,7 +57,11 @@ function parseBody(event) {
   const raw = event.isBase64Encoded
     ? Buffer.from(event.body, "base64").toString("utf8")
     : event.body;
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new InvalidJsonError("Request body must be valid JSON.");
+  }
 }
 
 async function trace(event) {
@@ -257,6 +263,9 @@ export async function handler(event) {
     );
     if (error instanceof z.ZodError) {
       return response(400, { error: "invalid_request", details: error.issues });
+    }
+    if (error instanceof InvalidJsonError) {
+      return response(400, { error: "invalid_json", message: error.message });
     }
     return response(500, {
       error: "request_failed",

@@ -155,6 +155,7 @@ export default function Home() {
   const [now, setNow] = useState("09:42:21Z");
   const [runId, setRunId] = useState<string | null>(null);
   const [memoryPlane, setMemoryPlane] = useState<"checking" | "live" | "demo">("checking");
+  const [operatorOpen, setOperatorOpen] = useState(false);
   const [traceMeta, setTraceMeta] = useState<TraceMeta>({
     decisionHlc: null,
     semanticAnomaly: 0,
@@ -361,9 +362,24 @@ export default function Home() {
 
         <div className="topbar-meta">
           <span className="utc-time">{now}</span>
-          <button className="avatar-button" aria-label="Operator menu">
+          <button
+            className="avatar-button"
+            aria-label="Operator menu"
+            aria-expanded={operatorOpen}
+            aria-controls="operator-menu"
+            onClick={() => setOperatorOpen((open) => !open)}
+          >
             AO
           </button>
+          {operatorOpen ? (
+            <div className="operator-menu" id="operator-menu" role="status">
+              <strong>Adarsh · incident operator</strong>
+              <span>Public judge mode</span>
+              <span className={memoryPlane === "live" ? "operator-live" : "operator-offline"}>
+                {memoryPlane === "live" ? "API + memory plane healthy" : "API health unavailable"}
+              </span>
+            </div>
+          ) : null}
         </div>
       </header>
 
