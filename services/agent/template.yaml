@@ -1,0 +1,98 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Lattice incident-memory agent on AWS
+
+Parameters:
+  DatabaseUrl:
+    Type: String
+    NoEcho: true
+    Description: CockroachDB connection string for the lattice database
+  AllowedOrigin:
+    Type: String
+    Default: "*"
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Architectures:
+      - arm64
+    Timeout: 28
+    MemorySize: 768
+    Environment:
+      Variables:
+        DATABASE_URL: !Ref DatabaseUrl
+        EVIDENCE_BUCKET: !Ref EvidenceBucket
+        ALLOWED_ORIGIN: !Ref AllowedOrigin
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        BEDROCK_EMBED_MODEL_ID: amazon.titan-embed-text-v2:0
+        NODE_OPTIONS: --enable-source-maps
+
+Resources:
+  LatticeApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref AllowedOrigin
+        AllowHeaders:
+          - content-type
+          - x-idempotency-key
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+
+  IncidentAgentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: src/index.handler
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref LatticeApi
+            Path: /{proxy+}
+            Method: ANY
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref EvidenceBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+
+  EvidenceBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ArchiveEvidence
+            Status: Enabled
+            Transitions:
+              - StorageClass: INTELLIGENT_TIERING
+                TransitionInDays: 30
+
+Outputs:
+  ApiUrl:
+    Description: Public HTTP endpoint for the Lattice agent
+    Value: !Sub "https://${LatticeApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
+  EvidenceBucketName:
+    Value: !Ref EvidenceBucket

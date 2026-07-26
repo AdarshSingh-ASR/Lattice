@@ -1,0 +1,14 @@
+flowchart LR
+    UI["Lattice control room<br/>Next.js"] --> API["Amazon API Gateway"]
+    API --> AGENT["AWS Lambda<br/>typed agent boundary"]
+    AGENT --> BEDROCK["Amazon Bedrock<br/>Nova planner + Titan embeddings"]
+    AGENT --> CRDB[("CockroachDB Cloud on AWS<br/>transactions + vector memory")]
+    AGENT --> S3[("Amazon S3<br/>versioned evidence receipts")]
+
+    SKILLS["CockroachDB Agent Skills<br/>transaction · privilege · health"] --> AGENT
+    CCLOUD["ccloud CLI<br/>provisioning + health receipts"] --> CRDB
+
+    CRDB --> VECTOR["Distributed vector index<br/>workspace-prefixed ANN recall"]
+    CRDB --> JOURNAL["Serializable action journal<br/>idempotent quarantine + branch"]
+    VECTOR --> AGENT
+    JOURNAL --> AGENT

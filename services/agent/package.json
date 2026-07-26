@@ -1,0 +1,24 @@
+{
+  "name": "@lattice/incident-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node --env-file=.env scripts/dev-server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "verify:database": "node scripts/verify-database.mjs",
+    "harden:runtime": "node scripts/harden-runtime.mjs",
+    "migrate": "node scripts/migrate.mjs",
+    "seed": "node scripts/seed.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.850.0",
+    "@aws-sdk/client-s3": "^3.850.0",
+    "pg": "^8.16.3",
+    "zod": "^4.0.10"
+  }
+}
