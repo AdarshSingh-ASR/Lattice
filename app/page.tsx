@@ -162,7 +162,7 @@ export default function Home() {
 
   const statusCopy = useMemo(() => {
     if (phase === "ready") return "Awaiting trace";
-    if (phase === "scanning") return "Retrieving 4 memories";
+    if (phase === "scanning") return "Retrieving 5 memories";
     if (phase === "conflict") return "Memory conflict found";
     if (phase === "replaying") return "Building trusted branch";
     return "Recovery plan verified";

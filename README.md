@@ -4,14 +4,17 @@
 
 ![Lattice — memory that can prove itself](./public/og.png)
 
+[Live demo](https://lattice-memory-plane.stitchboatimmigratio.chatgpt.site) ·
+[AWS agent health](https://x8vncko1s0.execute-api.us-east-1.amazonaws.com/health) ·
+[Devpost challenge](https://cockroachdb-ai.devpost.com/)
+
 Lattice is a flight recorder and action gate for incident-response agents. It
 does not merely retrieve old context. It records which memories caused a plan,
 tests those memories against signed policy and provenance, quarantines poisoned
 or stale recall, and replays the task on a clean branch before any side effect
 can run.
 
-Built for the
-[CockroachDB × AWS Hackathon — Build with Agentic Memory](https://cockroachdb-ai.devpost.com/).
+Built for the CockroachDB × AWS Hackathon — Build with Agentic Memory.
 
 ## The 90-second demo
 
