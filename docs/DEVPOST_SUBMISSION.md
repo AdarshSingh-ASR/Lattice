@@ -1,7 +1,7 @@
 # Devpost submission copy
 
 - **Demo:** https://lattice-memory-plane.stitchboatimmigratio.chatgpt.site
-- **Source:** https://github.com/AdarshSingh-ASR/lattice-memory-plane
+- **Source:** https://github.com/AdarshSingh-ASR/Lattice
 - **Health:** https://x8vncko1s0.execute-api.us-east-1.amazonaws.com/health
 
 ## Inspiration

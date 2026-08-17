@@ -35,14 +35,31 @@ test("server-renders the Lattice control room", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>Lattice — Incident memory control plane<\/title>/i);
-  assert.match(html, /Checkout degradation/);
+  assert.match(html, /Memory that can prove itself/);
   assert.match(html, /Run memory trace/);
-  assert.match(html, /Unsigned workaround/);
-  assert.match(html, /SERIALIZABLE/);
-  assert.match(html, /AS OF SYSTEM TIME/);
-  assert.match(html, /human gate/i);
-  assert.match(html, /aria-controls="operator-menu"/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Starter Project/i);
+});
+
+test("ships no fixture memories, plans or timeline data", async () => {
+  // The control room must render only what CockroachDB returned. Before a trace
+  // runs there is nothing to show, so none of the demo's domain content may be
+  // present in the bundle or the server-rendered shell.
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const fixtures = [
+    /Unsigned workaround/,
+    /Disable JWT signature/i,
+    /Freeze canary/i,
+    /Rotate gateway signing key/i,
+    /Gateway telemetry/i,
+    /\bM-211\b/,
+    /\bP-07\b/,
+  ];
+  for (const fixture of fixtures) {
+    assert.doesNotMatch(page, fixture, `page.tsx must not hardcode ${fixture}`);
+  }
+
+  const html = await (await render()).text();
+  assert.doesNotMatch(html, /Unsigned workaround|Freeze canary|\bM-211\b/);
 });
 
 test("publishes an absolute product social card", async () => {

@@ -8,8 +8,10 @@ const server = http.createServer(async (request, response) => {
   for await (const chunk of request) chunks.push(chunk);
   const body = Buffer.concat(chunks).toString("utf8");
 
+  const url = new URL(request.url, `http://${request.headers.host}`);
   const result = await handler({
-    rawPath: new URL(request.url, `http://${request.headers.host}`).pathname,
+    rawPath: url.pathname,
+    queryStringParameters: Object.fromEntries(url.searchParams),
     requestContext: {
       http: { method: request.method },
       requestId: request.headers["x-request-id"] || crypto.randomUUID(),

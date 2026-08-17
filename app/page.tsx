@@ -1,724 +1,815 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-type Phase =
-  | "ready"
-  | "scanning"
-  | "conflict"
-  | "replaying"
-  | "approval"
-  | "approved";
-
-type Memory = {
-  id: string;
-  label: string;
-  detail: string;
-  trust: number;
-  similarity: number;
-  kind: "evidence" | "memory" | "policy" | "poison";
-  position: string;
-};
-
-type TraceMeta = {
-  decisionHlc: string | null;
-  semanticAnomaly: number;
-  cohortAgreement: number;
-  temporalRows: number;
-  replayPlanner: string;
-};
+/**
+ * Lattice control room.
+ *
+ * Every value rendered below comes from the agent API, which reads it from
+ * CockroachDB. There is no fixture data in this file: before a trace is run the
+ * UI is deliberately empty, and each panel renders whatever the backend
+ * returned for the current run.
+ */
 
 const DEFAULT_REMOTE_API = "https://x8vncko1s0.execute-api.us-east-1.amazonaws.com";
 
-const memories: Memory[] = [
-  {
-    id: "E-17",
-    label: "Gateway telemetry",
-    detail: "502 rate crossed 41% at 09:42:18Z",
-    trust: 99,
-    similarity: 91,
-    kind: "evidence",
-    position: "node-a",
-  },
-  {
-    id: "M-184",
-    label: "Verified recovery",
-    detail: "Rollback canary before credential rotation",
-    trust: 98,
-    similarity: 93,
-    kind: "memory",
-    position: "node-b",
-  },
-  {
-    id: "M-211",
-    label: "Unsigned workaround",
-    detail: "Disable signature verification during key drift",
-    trust: 22,
-    similarity: 89,
-    kind: "poison",
-    position: "node-c",
-  },
-  {
-    id: "M-176",
-    label: "Key rotation pattern",
-    detail: "Missing issuer overlap creates transient 401 / 502",
-    trust: 94,
-    similarity: 86,
-    kind: "memory",
-    position: "node-d",
-  },
-  {
-    id: "P-07",
-    label: "Production policy",
-    detail: "Authentication controls can never be bypassed",
-    trust: 100,
-    similarity: 81,
-    kind: "policy",
-    position: "node-e",
-  },
-];
+type Violation = { id: string; reason: string };
+type Guardrail = { safe: boolean; violations: Violation[] };
 
-const incidentEvents = [
-  ["09:42:18", "Gateway 5xx rate", "2.1% → 41.3%", "critical"],
-  ["09:42:06", "Canary v3.8.1", "10% traffic", "warning"],
-  ["09:41:54", "JWT issuer", "overlap missing", "warning"],
-  ["09:41:32", "Checkout p95", "312ms → 4.8s", "critical"],
-];
+type Memory = {
+  id: string;
+  kind: string;
+  title: string;
+  content: string;
+  trustScore: number;
+  provenance: Record<string, unknown> | null;
+  signatureStatus: string;
+  status: string;
+  supersedesId: string | null;
+  createdAt?: string | null;
+  similarity: number;
+  cohortAgreement: number;
+  semanticAnomaly: number;
+  guardrail: Guardrail;
+};
 
-const safeActions = [
-  ["01", "Freeze canary at 10%", "Reversible", "ready"],
-  ["02", "Restore issuer overlap", "Human approval", "approval"],
-  ["03", "Rollback checkout v3.8.1", "Idempotent", "ready"],
-  ["04", "Verify auth + error budget", "Read-only", "ready"],
-];
+type PlanAction = {
+  key: string;
+  title: string;
+  mode: string;
+  requiresApproval?: boolean;
+  memoryIds?: string[];
+};
 
-function PhaseButton({
-  phase,
-  onRun,
-  onQuarantine,
-  onApprove,
-  onReset,
-}: {
-  phase: Phase;
-  onRun: () => void;
-  onQuarantine: () => void;
-  onApprove: () => void;
-  onReset: () => void;
-}) {
-  if (phase === "ready") {
-    return (
-      <button className="primary-button" onClick={onRun}>
-        <span>Run memory trace</span>
-        <span aria-hidden="true">↗</span>
-      </button>
-    );
+type Plan = {
+  version?: number;
+  branch?: string;
+  summary?: string;
+  confidence?: number | string;
+  generatedBy?: string;
+  sourceMemoryIds?: string[];
+  actions: PlanAction[];
+};
+
+type Incident = {
+  id: string;
+  title: string;
+  severity: string;
+  region: string;
+  status: string;
+  summary: string;
+  created_at: string;
+};
+
+type TraceResponse = {
+  runId: string;
+  phase: string;
+  planner: string;
+  incident: Incident;
+  memories: Memory[];
+  conflicts: Memory[];
+  plan: Plan;
+  skillReceipts: { name: string; version: string; source: string }[];
+  database: {
+    role: string;
+    isolation: string;
+    vectorIndex: string;
+    decisionHlc: string | null;
+    decisionWallTime: string | null;
+  };
+};
+
+type QuarantineResponse = {
+  runId: string;
+  phase: string;
+  branch: string;
+  plan: Plan;
+  quarantinedMemoryId: string;
+  eventId: string;
+  quarantinedAt?: string | null;
+  temporalProof: {
+    engine: string;
+    queryMode: string;
+    exactHlc: string;
+    reconstructedRows: number;
+  };
+  replayPlanner: string;
+  evidence: { stored: boolean; hash: string; key?: string; versionId?: string | null };
+};
+
+type ApprovalResponse = {
+  phase: string;
+  branch: string;
+  actor: string;
+  planHash: string;
+  executionGate: string;
+  sideEffectsExecuted: boolean;
+  evidence: { stored: boolean; hash: string; versionId?: string | null };
+};
+
+type LineageEvent = {
+  id: string;
+  memoryId: string;
+  eventType: string;
+  actor: string;
+  reason: string;
+  evidenceHash: string;
+  branch: string | null;
+  createdAt: string;
+  fromThisRun: boolean;
+};
+
+type Lineage = {
+  run: {
+    phase: string;
+    branch: string;
+    decisionHlc: string | null;
+    decisionWallTime: string | null;
+    createdAt: string;
+  };
+  reads: {
+    memoryId: string;
+    rank: number;
+    decision: string;
+    readAt: string;
+    memoryCreatedAt: string;
+  }[];
+  events: LineageEvent[];
+  interventions: { memoryId: string; state: string; createdAt: string; reason: string }[];
+  approvals: { decision: string; actor: string; createdAt: string }[];
+  source: { engine: string; tables: string[] };
+};
+
+type TrustState = "verified" | "unverified" | "quarantined";
+
+type TimelineNode = {
+  key: string;
+  memoryId: string;
+  type: "written" | "referenced" | "flagged" | "quarantined" | "approved";
+  at: string | null;
+  label: string;
+  detail: string;
+  trust: TrustState;
+};
+
+/** Deterministic 6-char display hash so a real memory id reads like a commit. */
+function shortHash(input: string) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
   }
+  return hash.toString(16).padStart(8, "0").slice(0, 6);
+}
 
-  if (phase === "scanning" || phase === "replaying") {
-    return (
-      <button className="primary-button is-loading" disabled>
-        <span className="spinner" aria-hidden="true" />
-        <span>{phase === "scanning" ? "Tracing causal memory" : "Replaying safe branch"}</span>
-      </button>
-    );
-  }
+function formatTime(value?: string | null) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toISOString().replace("T", " ").replace(/\.\d+Z$/, "Z");
+}
 
-  if (phase === "conflict") {
-    return (
-      <button className="danger-button" onClick={onQuarantine}>
-        <span>Quarantine + replay</span>
-        <span aria-hidden="true">⌁</span>
-      </button>
-    );
-  }
+function trustOf(memory: Memory, quarantinedId?: string | null): TrustState {
+  if (quarantinedId && memory.id === quarantinedId) return "quarantined";
+  if (memory.signatureStatus === "verified" && memory.guardrail.safe) return "verified";
+  return "unverified";
+}
 
-  if (phase === "approval") {
-    return (
-      <button className="approval-button" onClick={onApprove}>
-        <span>Approve safe plan</span>
-        <span aria-hidden="true">✓</span>
-      </button>
-    );
-  }
-
-  return (
-    <button className="primary-button" onClick={onReset}>
-      <span>Replay incident again</span>
-      <span aria-hidden="true">↻</span>
-    </button>
+/** Normalises an action for cross-plan matching in the diff. */
+function actionTokens(action: PlanAction) {
+  return new Set(
+    `${action.key} ${action.title}`
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length > 3),
   );
 }
 
-export default function Home() {
-  const [phase, setPhase] = useState<Phase>("ready");
-  const [selectedMemory, setSelectedMemory] = useState<Memory>(memories[1]);
-  const [now, setNow] = useState("09:42:21Z");
-  const [runId, setRunId] = useState<string | null>(null);
-  const [memoryPlane, setMemoryPlane] = useState<"checking" | "live" | "demo">("checking");
-  const [operatorOpen, setOperatorOpen] = useState(false);
-  const [traceMeta, setTraceMeta] = useState<TraceMeta>({
-    decisionHlc: null,
-    semanticAnomaly: 0,
-    cohortAgreement: 0,
-    temporalRows: 0,
-    replayPlanner: "pending",
+function sameAction(a: PlanAction, b: PlanAction) {
+  if (a.key === b.key) return true;
+  const left = actionTokens(a);
+  const right = actionTokens(b);
+  if (!left.size || !right.size) return false;
+  let shared = 0;
+  left.forEach((token) => {
+    if (right.has(token)) shared += 1;
   });
+  return shared / Math.min(left.size, right.size) >= 0.5;
+}
+
+export default function Home() {
+  const [api, setApi] = useState<string>("");
+  const [connection, setConnection] = useState<"checking" | "live" | "down">("checking");
+  const [view, setView] = useState<"timeline" | "diff">("timeline");
+
+  const [trace, setTrace] = useState<TraceResponse | null>(null);
+  const [quarantine, setQuarantine] = useState<QuarantineResponse | null>(null);
+  const [approval, setApproval] = useState<ApprovalResponse | null>(null);
+  const [lineage, setLineage] = useState<Lineage | null>(null);
+
+  const [selected, setSelected] = useState<string | null>(null);
+  const [busy, setBusy] = useState<null | "trace" | "quarantine" | "approve">(null);
+  const [error, setError] = useState<string | null>(null);
+  const [replaying, setReplaying] = useState(false);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setNow(
-        new Intl.DateTimeFormat("en-GB", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-          hour12: false,
-          timeZone: "UTC",
-        }).format(new Date()) + "Z",
-      );
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    const apiBase = resolveApiBase();
-    if (!apiBase) {
-      const timer = window.setTimeout(() => setMemoryPlane("demo"), 0);
-      return () => window.clearTimeout(timer);
-    }
-    fetch(`${apiBase}/health`, { cache: "no-store" })
-      .then((response) => {
-        if (!response.ok) throw new Error("unavailable");
-        setMemoryPlane("live");
-      })
-      .catch(() => setMemoryPlane("demo"));
-  }, []);
-
-  const statusCopy = useMemo(() => {
-    if (phase === "ready") return "Awaiting trace";
-    if (phase === "scanning") return "Retrieving 5 memories";
-    if (phase === "conflict") return "Memory conflict found";
-    if (phase === "replaying") return "Building trusted branch";
-    if (phase === "approval") return "Replay awaiting approval";
-    return "Recovery plan approved";
-  }, [phase]);
-
-  function resolveApiBase() {
     const configured = process.env.NEXT_PUBLIC_LATTICE_API_URL;
-    if (configured) return configured.replace(/\/$/, "");
-    if (typeof window !== "undefined" && /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname)) {
-      return "http://127.0.0.1:8787";
+    const base = configured
+      ? configured.replace(/\/$/, "")
+      : /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname)
+        ? "http://127.0.0.1:8787"
+        : DEFAULT_REMOTE_API;
+    setApi(base);
+
+    fetch(`${base}/health`, { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error("unhealthy");
+        setConnection("live");
+      })
+      .catch(() => setConnection("down"));
+  }, []);
+
+  const loadLineage = useCallback(
+    async (runId: string) => {
+      try {
+        const response = await fetch(`${api}/lineage?runId=${encodeURIComponent(runId)}`, {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        setLineage(await response.json());
+      } catch {
+        // Lineage enriches the timeline; the run data already carries the truth.
+      }
+    },
+    [api],
+  );
+
+  async function post<T>(path: string, body: unknown, idempotencyKey: string): Promise<T> {
+    const response = await fetch(`${api}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || payload.message || `${path} failed (${response.status})`);
     }
-    return DEFAULT_REMOTE_API;
+    return response.json();
   }
 
   async function runTrace() {
-    setPhase("scanning");
-    const apiBase = resolveApiBase();
-    if (apiBase) {
-      try {
-        const response = await fetch(`${apiBase}/trace`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-idempotency-key": `web-trace-${crypto.randomUUID()}`,
-          },
-          body: JSON.stringify({ incidentId: "INC-0427" }),
-        });
-        if (!response.ok) throw new Error("trace failed");
-        const payload = await response.json();
-        setRunId(payload.runId);
-        const poisoned = payload.memories?.find((memory: { id: string }) => memory.id === "M-211");
-        setTraceMeta((current) => ({
-          ...current,
-          decisionHlc: payload.database?.decisionHlc ?? null,
-          semanticAnomaly: Number(poisoned?.semanticAnomaly ?? 0),
-          cohortAgreement: Number(poisoned?.cohortAgreement ?? 0),
-        }));
-        setMemoryPlane("live");
-        setSelectedMemory(memories[2]);
-        setPhase("conflict");
-        return;
-      } catch {
-        setMemoryPlane("demo");
-      }
+    setBusy("trace");
+    setError(null);
+    setQuarantine(null);
+    setApproval(null);
+    setLineage(null);
+    setSelected(null);
+    try {
+      const payload = await post<TraceResponse>(
+        "/trace",
+        { incidentId: "INC-0427" },
+        `web-trace-${crypto.randomUUID()}`,
+      );
+      setTrace(payload);
+      setConnection("live");
+      setView("timeline");
+      const firstConflict = payload.conflicts[0]?.id ?? payload.memories[0]?.id ?? null;
+      setSelected(firstConflict);
+      void loadLineage(payload.runId);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Trace failed");
+      setConnection("down");
+    } finally {
+      setBusy(null);
     }
-    window.setTimeout(() => {
-      setSelectedMemory(memories[2]);
-      setPhase("conflict");
-    }, 1150);
   }
 
-  async function quarantineAndReplay() {
-    setPhase("replaying");
-    const apiBase = resolveApiBase();
-    if (apiBase && runId) {
-      try {
-        const response = await fetch(`${apiBase}/quarantine`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-idempotency-key": `web-quarantine-${runId}`,
-          },
-          body: JSON.stringify({
-            runId,
-            memoryId: "M-211",
-            reason: "Unsigned memory conflicts with signed authentication policy P-07.",
-          }),
-        });
-        if (!response.ok) throw new Error("replay failed");
-        const payload = await response.json();
-        setMemoryPlane("live");
-        setSelectedMemory(memories[1]);
-        setTraceMeta((current) => ({
-          ...current,
-          decisionHlc: payload.temporalProof?.exactHlc ?? current.decisionHlc,
-          temporalRows: Number(payload.temporalProof?.reconstructedRows ?? 0),
-          replayPlanner: payload.replayPlanner ?? "verified-fallback",
-        }));
-        setPhase("approval");
-        return;
-      } catch {
-        setMemoryPlane("demo");
-      }
+  async function runQuarantine(memoryId: string) {
+    if (!trace) return;
+    setBusy("quarantine");
+    setError(null);
+    try {
+      const payload = await post<QuarantineResponse>(
+        "/quarantine",
+        {
+          runId: trace.runId,
+          memoryId,
+          reason: `Quarantined by operator: ${
+            trace.memories
+              .find((memory) => memory.id === memoryId)
+              ?.guardrail.violations.map((violation) => violation.id)
+              .join(", ") || "failed provenance checks"
+          }`,
+        },
+        `web-quarantine-${trace.runId}-${memoryId}`,
+      );
+      setQuarantine(payload);
+      setView("diff");
+      setReplaying(true);
+      window.setTimeout(() => setReplaying(false), 1900);
+      void loadLineage(trace.runId);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Quarantine failed");
+    } finally {
+      setBusy(null);
     }
-    window.setTimeout(() => {
-      setSelectedMemory(memories[1]);
-      setTraceMeta((current) => ({
-        ...current,
-        temporalRows: 5,
-        replayPlanner: "amazon-bedrock-guarded",
-      }));
-      setPhase("approval");
-    }, 1250);
   }
 
-  async function approveSafePlan() {
-    const apiBase = resolveApiBase();
-    if (apiBase && runId) {
-      try {
-        const response = await fetch(`${apiBase}/approve`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-idempotency-key": `web-approval-${runId}`,
-          },
-          body: JSON.stringify({ runId, actor: "human-operator" }),
-        });
-        if (!response.ok) throw new Error("approval failed");
-        setMemoryPlane("live");
-        setPhase("approved");
-        return;
-      } catch {
-        setMemoryPlane("demo");
-      }
+  async function runApprove() {
+    if (!trace) return;
+    setBusy("approve");
+    setError(null);
+    try {
+      const payload = await post<ApprovalResponse>(
+        "/approve",
+        { runId: trace.runId, actor: "human-operator" },
+        `web-approval-${trace.runId}`,
+      );
+      setApproval(payload);
+      void loadLineage(trace.runId);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Approval failed");
+    } finally {
+      setBusy(null);
     }
-    window.setTimeout(() => setPhase("approved"), 450);
   }
 
-  function resetDemo() {
-    setSelectedMemory(memories[1]);
-    setRunId(null);
-    setTraceMeta({
-      decisionHlc: null,
-      semanticAnomaly: 0,
-      cohortAgreement: 0,
-      temporalRows: 0,
-      replayPlanner: "pending",
+  const quarantinedId = quarantine?.quarantinedMemoryId ?? null;
+
+  /**
+   * The timeline is assembled from rows the backend returned. When /lineage is
+   * available its real event rows win; otherwise we fall back to the timestamps
+   * carried on the trace and quarantine responses. Nothing here is invented.
+   */
+  const timeline = useMemo<TimelineNode[]>(() => {
+    if (!trace) return [];
+    const nodes: TimelineNode[] = [];
+    const readAt = lineage?.run.decisionWallTime ?? trace.database.decisionWallTime;
+
+    for (const memory of trace.memories) {
+      const trust = trustOf(memory, quarantinedId);
+      const read = lineage?.reads.find((row) => row.memoryId === memory.id);
+      const writtenAt = read?.memoryCreatedAt ?? memory.createdAt ?? null;
+
+      if (writtenAt) {
+        nodes.push({
+          key: `${memory.id}:written`,
+          memoryId: memory.id,
+          type: "written",
+          at: writtenAt,
+          label: "written",
+          detail: `${memory.kind} · ${memory.signatureStatus}`,
+          trust: trust === "quarantined" ? "quarantined" : trust,
+        });
+      }
+
+      nodes.push({
+        key: `${memory.id}:referenced`,
+        memoryId: memory.id,
+        type: "referenced",
+        at: read?.readAt ?? readAt,
+        label: "referenced",
+        detail: `rank ${read?.rank ?? trace.memories.indexOf(memory) + 1} · cos ${memory.similarity.toFixed(4)}`,
+        trust,
+      });
+
+      if (!memory.guardrail.safe) {
+        nodes.push({
+          key: `${memory.id}:flagged`,
+          memoryId: memory.id,
+          type: "flagged",
+          at: read?.readAt ?? readAt,
+          label: "flagged",
+          detail: memory.guardrail.violations.map((violation) => violation.id).join(" · "),
+          trust: trust === "quarantined" ? "quarantined" : "unverified",
+        });
+      }
+    }
+
+    for (const intervention of lineage?.interventions ?? []) {
+      nodes.push({
+        key: `${intervention.memoryId}:quarantined`,
+        memoryId: intervention.memoryId,
+        type: "quarantined",
+        at: intervention.createdAt,
+        label: intervention.state,
+        detail: intervention.reason,
+        trust: "quarantined",
+      });
+    }
+    if (!lineage && quarantine) {
+      nodes.push({
+        key: `${quarantine.quarantinedMemoryId}:quarantined`,
+        memoryId: quarantine.quarantinedMemoryId,
+        type: "quarantined",
+        at: null,
+        label: "quarantined",
+        detail: `branch ${quarantine.branch}`,
+        trust: "quarantined",
+      });
+    }
+
+    for (const record of lineage?.approvals ?? []) {
+      nodes.push({
+        key: `approval:${record.createdAt}`,
+        memoryId: "—",
+        type: "approved",
+        at: record.createdAt,
+        label: `plan ${record.decision}`,
+        detail: `by ${record.actor}`,
+        trust: "verified",
+      });
+    }
+    if (!lineage?.approvals.length && approval) {
+      nodes.push({
+        key: "approval:local",
+        memoryId: "—",
+        type: "approved",
+        at: null,
+        label: "plan approved",
+        detail: `by ${approval.actor}`,
+        trust: "verified",
+      });
+    }
+
+    return nodes.sort((a, b) => {
+      if (!a.at) return 1;
+      if (!b.at) return -1;
+      return new Date(a.at).getTime() - new Date(b.at).getTime();
     });
-    setPhase("ready");
-  }
+  }, [trace, lineage, quarantine, approval, quarantinedId]);
 
-  const traceActive = phase !== "ready";
-  const conflictVisible = phase === "conflict" || phase === "replaying";
-  const replayed = phase === "approval" || phase === "approved";
-  const approved = phase === "approved";
-  const shortHlc = traceMeta.decisionHlc
-    ? `${traceMeta.decisionHlc.slice(0, 19)}…`
-    : "capture pending";
+  const selectedMemory = trace?.memories.find((memory) => memory.id === selected) ?? null;
+
+  const influencedActions = useMemo(() => {
+    if (!selectedMemory || !trace) return [] as { plan: string; action: PlanAction }[];
+    const rows: { plan: string; action: PlanAction }[] = [];
+    for (const action of trace.plan.actions ?? []) {
+      if (action.memoryIds?.includes(selectedMemory.id)) rows.push({ plan: "v1", action });
+    }
+    for (const action of quarantine?.plan.actions ?? []) {
+      if (action.memoryIds?.includes(selectedMemory.id)) rows.push({ plan: "v2", action });
+    }
+    return rows;
+  }, [selectedMemory, trace, quarantine]);
+
+  const diff = useMemo(() => {
+    const before = trace?.plan.actions ?? [];
+    const after = quarantine?.plan.actions ?? [];
+    if (!after.length) return null;
+    return {
+      removed: before.filter((action) => !after.some((other) => sameAction(action, other))),
+      kept: before.filter((action) => after.some((other) => sameAction(action, other))),
+      added: after.filter((action) => !before.some((other) => sameAction(action, other))),
+      after,
+    };
+  }, [trace, quarantine]);
+
+  const blockedMemories = trace?.conflicts ?? [];
+  const unresolved = blockedMemories.filter((memory) => memory.id !== quarantinedId);
+  const canApprove = Boolean(quarantine) && unresolved.length === 0 && !approval;
 
   return (
-    <main className={`app-shell phase-${phase}`}>
-      <header className="topbar">
-        <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
-          <div>
-            <div className="brand-name">LATTICE</div>
-            <div className="brand-subtitle">Incident memory control plane</div>
-          </div>
+    <main className="shell">
+      <header className="top">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true" />
+          <span className="brand-name">lattice</span>
+          <span className="brand-sub">memory provenance</span>
         </div>
 
-        <div className="topbar-center" aria-label="System status">
-          <span className={`live-dot plane-${memoryPlane}`} />
-          <span>{memoryPlane === "live" ? "MEMORY PLANE LIVE" : memoryPlane === "checking" ? "CONNECTING" : "DEMO MEMORY"}</span>
-          <span className="slash">/</span>
-          <span>COCKROACHDB</span>
-          <span className="slash">/</span>
-          <span>AWS</span>
-        </div>
-
-        <div className="topbar-meta">
-          <span className="utc-time">{now}</span>
+        <nav className="tabs" aria-label="Views">
           <button
-            className="avatar-button"
-            aria-label="Operator menu"
-            aria-expanded={operatorOpen}
-            aria-controls="operator-menu"
-            onClick={() => setOperatorOpen((open) => !open)}
+            className={view === "timeline" ? "tab is-active" : "tab"}
+            onClick={() => setView("timeline")}
           >
-            AO
+            log
           </button>
-          {operatorOpen ? (
-            <div className="operator-menu" id="operator-menu" role="status">
-              <strong>Adarsh · incident operator</strong>
-              <span>Public judge mode</span>
-              <span className={memoryPlane === "live" ? "operator-live" : "operator-offline"}>
-                {memoryPlane === "live" ? "API + memory plane healthy" : "API health unavailable"}
-              </span>
-            </div>
-          ) : null}
+          <button
+            className={view === "diff" ? "tab is-active" : "tab"}
+            onClick={() => setView("diff")}
+            disabled={!diff}
+          >
+            diff
+          </button>
+        </nav>
+
+        <div className="top-meta">
+          <span className={`conn conn-${connection}`}>
+            {connection === "live" ? "cockroachdb live" : connection === "down" ? "api unreachable" : "connecting"}
+          </span>
+          {trace ? <code className="run-id">run {shortHash(trace.runId)}</code> : null}
         </div>
       </header>
 
-      <section className="mission-strip" aria-label="Active incident">
-        <div className="mission-id">
-          <span className="eyebrow">ACTIVE INCIDENT</span>
-          <strong>INC-0427</strong>
-        </div>
-        <div className="mission-title">
-          <span className="severity-pill">SEV-1</span>
-          <h1>Checkout degradation</h1>
-          <span className="region-label">US-EAST-1</span>
-        </div>
-        <div className={`trace-status status-${phase}`}>
-          <span className="status-symbol" aria-hidden="true">
-            {approved ? "✓" : replayed ? "H" : conflictVisible ? "!" : traceActive ? "◌" : "•"}
-          </span>
-          <span>{statusCopy}</span>
-        </div>
-      </section>
+      {trace ? (
+        <section className="incident-bar">
+          <span className="sev">{trace.incident.severity}</span>
+          <strong>{trace.incident.title}</strong>
+          <code>{trace.incident.id}</code>
+          <code className="dim">{trace.incident.region}</code>
+          <span className="spacer" />
+          <code className="dim">
+            AS OF SYSTEM TIME{" "}
+            {quarantine?.temporalProof.exactHlc ?? trace.database.decisionHlc ?? "—"}
+          </code>
+        </section>
+      ) : null}
 
-      <section className="workspace">
-        <aside className="signal-panel panel">
-          <div className="panel-heading">
-            <div>
-              <span className="eyebrow">01 / LIVE SIGNAL</span>
-              <h2>What changed</h2>
-            </div>
-            <span className="count-badge">04</span>
+      {error ? (
+        <div className="error-bar" role="alert">
+          {error}
+        </div>
+      ) : null}
+
+      {!trace ? (
+        <section className="empty">
+          <h1>Memory that can prove itself.</h1>
+          <p>
+            Lattice records which memories caused an agent plan, tests them against signed
+            policy and provenance, and blocks side effects when recall cannot be trusted.
+          </p>
+          <button className="btn btn-primary" onClick={runTrace} disabled={busy !== null || !api}>
+            {busy === "trace" ? "tracing…" : "Run memory trace"}
+          </button>
+          <p className="empty-note">
+            Nothing on this screen is fixture data. Every node, score and timestamp is read
+            from CockroachDB when the trace runs.
+          </p>
+        </section>
+      ) : view === "timeline" ? (
+        <section className="log-view">
+          <div className="graph" role="list" aria-label="Memory event graph">
+            {timeline.map((node) => {
+              const isSelected = node.memoryId === selected;
+              return (
+                <button
+                  role="listitem"
+                  key={node.key}
+                  className={`row row-${node.type} trust-${node.trust} ${isSelected ? "is-selected" : ""}`}
+                  onClick={() => node.memoryId !== "—" && setSelected(node.memoryId)}
+                >
+                  <span className="rail" aria-hidden="true">
+                    <i className={`node node-${node.trust} glyph-${node.type}`} />
+                  </span>
+                  <code className="hash">#{shortHash(node.memoryId)}</code>
+                  <span className="row-label">{node.label}</span>
+                  <span className="row-detail">{node.detail}</span>
+                  <code className="row-time">{formatTime(node.at)}</code>
+                </button>
+              );
+            })}
           </div>
 
-          <div className="metric-hero">
-            <div className="metric-label">CHECKOUT AVAILABILITY</div>
-            <div className="metric-value">
-              58.7<span>%</span>
-            </div>
-            <div className="spark-bars" aria-label="Availability falling">
-              {[78, 83, 76, 71, 66, 60, 51, 44, 30, 22].map((height, index) => (
-                <i key={index} style={{ height: `${height}%` }} />
-              ))}
-            </div>
-            <div className="metric-delta">−40.8% in 49 seconds</div>
-          </div>
-
-          <div className="event-list">
-            {incidentEvents.map(([time, label, value, severity]) => (
-              <div className="event-row" key={label}>
-                <span className="event-time">{time}</span>
-                <div className="event-copy">
-                  <strong>{label}</strong>
-                  <span>{value}</span>
+          <aside className="inspect">
+            {selectedMemory ? (
+              <>
+                <div className="inspect-head">
+                  <code className="hash big">#{shortHash(selectedMemory.id)}</code>
+                  <span className={`badge trust-${trustOf(selectedMemory, quarantinedId)}`}>
+                    {trustOf(selectedMemory, quarantinedId)}
+                  </span>
                 </div>
-                <span className={`event-indicator ${severity}`} />
+                <h2>{selectedMemory.title}</h2>
+                <p className="content">{selectedMemory.content}</p>
+
+                <dl className="meta">
+                  <div>
+                    <dt>memory id</dt>
+                    <dd><code>{selectedMemory.id}</code></dd>
+                  </div>
+                  <div>
+                    <dt>written</dt>
+                    <dd><code>{formatTime(selectedMemory.createdAt)}</code></dd>
+                  </div>
+                  <div>
+                    <dt>signer</dt>
+                    <dd>
+                      <code>
+                        {String(
+                          (selectedMemory.provenance as { reviewer?: string })?.reviewer ??
+                            "unsigned",
+                        )}
+                      </code>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>source</dt>
+                    <dd>
+                      <code>
+                        {String((selectedMemory.provenance as { source?: string })?.source ?? "—")}
+                      </code>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>signature</dt>
+                    <dd><code>{selectedMemory.signatureStatus}</code></dd>
+                  </div>
+                  <div>
+                    <dt>trust</dt>
+                    <dd><code>{selectedMemory.trustScore}/100</code></dd>
+                  </div>
+                  <div>
+                    <dt>cosine</dt>
+                    <dd><code>{selectedMemory.similarity.toFixed(6)}</code></dd>
+                  </div>
+                  <div>
+                    <dt>cohort agreement</dt>
+                    <dd><code>{selectedMemory.cohortAgreement.toFixed(4)}</code></dd>
+                  </div>
+                  <div>
+                    <dt>semantic anomaly</dt>
+                    <dd><code>{selectedMemory.semanticAnomaly.toFixed(4)}</code></dd>
+                  </div>
+                  <div>
+                    <dt>as of system time</dt>
+                    <dd>
+                      <code>
+                        {quarantine?.temporalProof.exactHlc ?? trace.database.decisionHlc ?? "—"}
+                      </code>
+                    </dd>
+                  </div>
+                </dl>
+
+                {influencedActions.length ? (
+                  <div className="influenced">
+                    <span className="section-label">actions influenced</span>
+                    {influencedActions.map(({ plan, action }) => (
+                      <div className="influenced-row" key={`${plan}:${action.key}`}>
+                        <code>{plan}</code>
+                        <span>{action.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                {!selectedMemory.guardrail.safe ? (
+                  <div className="blocked" role="alert">
+                    <strong>This memory cannot be trusted to inform an action.</strong>
+                    <ul>
+                      {selectedMemory.guardrail.violations.map((violation) => (
+                        <li key={violation.id}>
+                          <code>{violation.id}</code>
+                          <span>{violation.reason}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    {selectedMemory.id !== quarantinedId ? (
+                      <button
+                        className="btn btn-danger"
+                        onClick={() => runQuarantine(selectedMemory.id)}
+                        disabled={busy !== null}
+                      >
+                        {busy === "quarantine" ? "replaying…" : "Quarantine and replay"}
+                      </button>
+                    ) : (
+                      <span className="resolved">quarantined on {quarantine?.branch}</span>
+                    )}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <p className="inspect-empty">Select a node to inspect its provenance.</p>
+            )}
+          </aside>
+        </section>
+      ) : diff ? (
+        <section className={`diff-view ${replaying ? "is-replaying" : ""}`}>
+          <div className="diff-head">
+            <code>
+              {(() => {
+                const at =
+                  lineage?.interventions[0]?.createdAt ?? quarantine?.quarantinedAt ?? null;
+                return at ? `Replay at ${formatTime(at)} — ` : "Replay — ";
+              })()}
+              excluding memory {quarantinedId} (#{shortHash(quarantinedId ?? "")}), reason:{" "}
+              {trace.memories
+                .find((memory) => memory.id === quarantinedId)
+                ?.guardrail.violations.map((violation) => violation.id)
+                .join(", ") || "failed provenance"}
+            </code>
+            <code className="dim">
+              {quarantine?.temporalProof.queryMode} {quarantine?.temporalProof.exactHlc} ·{" "}
+              {quarantine?.temporalProof.reconstructedRows} rows reconstructed
+            </code>
+          </div>
+
+          <div className="panes">
+            <div className="pane pane-before">
+              <div className="pane-head">
+                <span>plan v{trace.plan.version ?? 1}</span>
+                <code className="dim">branch main · {trace.planner}</code>
               </div>
-            ))}
-          </div>
-
-          <div className="causal-hypothesis">
-            <span className="eyebrow">LIVE HYPOTHESIS</span>
-            <p>
-              Canary deployment and incomplete JWT issuer overlap are jointly
-              driving gateway failures.
-            </p>
-            <div>
-              <span>Confidence</span>
-              <strong>{replayed ? "96%" : "78%"}</strong>
-            </div>
-          </div>
-        </aside>
-
-        <section className="memory-panel panel">
-          <div className="panel-heading">
-            <div>
-              <span className="eyebrow">02 / CAUSAL MEMORY</span>
-              <h2>Why the agent believes it</h2>
-            </div>
-            <div className="latency-chip">
-              <span>VECTOR RECALL</span>
-              <strong>43ms</strong>
-            </div>
-          </div>
-
-          <div className={`memory-canvas ${traceActive ? "is-active" : ""}`}>
-            <div className="grid-plane" aria-hidden="true" />
-            <div className="connection line-1" aria-hidden="true" />
-            <div className="connection line-2" aria-hidden="true" />
-            <div className="connection line-3" aria-hidden="true" />
-            <div className="connection line-4" aria-hidden="true" />
-            <div className="connection line-5" aria-hidden="true" />
-
-            <div className="incident-core">
-              <span>INC</span>
-              <strong>0427</strong>
-              <small>NOW</small>
+              {trace.plan.summary ? <p className="pane-summary">{trace.plan.summary}</p> : null}
+              <ol className="steps">
+                {(trace.plan.actions ?? []).map((action) => {
+                  const removed = diff.removed.some((other) => other.key === action.key);
+                  return (
+                    <li key={action.key} className={removed ? "step removed" : "step"}>
+                      <span className="sign">{removed ? "−" : " "}</span>
+                      <span className="step-body">
+                        <span className="step-title">{action.title}</span>
+                        <code className="step-meta">
+                          {action.mode}
+                          {action.memoryIds?.length ? ` · ${action.memoryIds.join(" ")}` : ""}
+                        </code>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
             </div>
 
-            {memories.map((memory) => (
-              <button
-                key={memory.id}
-                className={[
-                  "memory-node",
-                  memory.position,
-                  `kind-${memory.kind}`,
-                  selectedMemory.id === memory.id ? "is-selected" : "",
-                  memory.kind === "poison" && replayed ? "is-quarantined" : "",
-                ].join(" ")}
-                onClick={() => setSelectedMemory(memory)}
-                aria-label={`Inspect memory ${memory.id}: ${memory.label}`}
-              >
-                <span className="node-kicker">{memory.id}</span>
-                <strong>{memory.label}</strong>
-                <span className="node-score">
-                  {memory.kind === "poison" && replayed ? "QUARANTINED" : `${memory.similarity}% match`}
-                </span>
-              </button>
-            ))}
-
-            <div className="canvas-legend">
-              <span><i className="legend-dot verified" /> verified</span>
-              <span><i className="legend-dot evidence" /> evidence</span>
-              <span><i className="legend-dot poison" /> untrusted</span>
-            </div>
-          </div>
-
-          <div className={`memory-inspector inspector-${selectedMemory.kind}`}>
-            <div className="inspector-topline">
-              <span>{selectedMemory.id}</span>
-              <span>{selectedMemory.kind === "poison" && replayed ? "QUARANTINED" : "SELECTED MEMORY"}</span>
-            </div>
-            <div className="inspector-body">
-              <div>
-                <strong>{selectedMemory.label}</strong>
-                <p>{selectedMemory.detail}</p>
+            <div className="pane pane-after">
+              <div className="pane-head">
+                <span>plan v{quarantine?.plan.version ?? 2}</span>
+                <code className="dim">
+                  branch {quarantine?.branch} · {quarantine?.replayPlanner}
+                </code>
               </div>
-              <div className="trust-meter">
-                <span>TRUST</span>
-                <strong>{selectedMemory.trust}</strong>
-                <div><i style={{ width: `${selectedMemory.trust}%` }} /></div>
-              </div>
+              {quarantine?.plan.summary ? (
+                <p className="pane-summary">{quarantine.plan.summary}</p>
+              ) : null}
+              <ol className="steps">
+                {diff.after.map((action, index) => {
+                  const added = diff.added.some((other) => other.key === action.key);
+                  return (
+                    <li
+                      key={action.key}
+                      className={added ? "step added" : "step"}
+                      style={{ animationDelay: `${520 + index * 130}ms` }}
+                    >
+                      <span className="sign">{added ? "+" : " "}</span>
+                      <span className="step-body">
+                        <span className="step-title">{action.title}</span>
+                        <code className="step-meta">
+                          {action.mode}
+                          {action.requiresApproval ? " · approval" : ""}
+                          {action.memoryIds?.length ? ` · ${action.memoryIds.join(" ")}` : ""}
+                        </code>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
             </div>
-            <div className="provenance-row">
-              <span>PROVENANCE</span>
+          </div>
+
+          <div className="gate">
+            <div className="gate-facts">
               <code>
-                {selectedMemory.kind === "poison"
-                  ? "bot-import / unsigned / 12d old"
-                  : selectedMemory.kind === "policy"
-                    ? "security-policy / signed / v7"
-                    : "postmortem / human-verified / immutable"}
+                sources {quarantine?.plan.sourceMemoryIds?.join(" ") ?? "—"}
               </code>
+              {quarantine?.evidence.stored ? (
+                <code className="dim">
+                  evidence {quarantine.evidence.hash.slice(0, 12)}…
+                  {quarantine.evidence.versionId ? ` · s3 v${quarantine.evidence.versionId.slice(0, 8)}` : ""}
+                </code>
+              ) : null}
             </div>
-            {selectedMemory.kind === "poison" && traceActive ? (
-              <div className="anomaly-row">
-                <span>VECTOR COHORT ANOMALY</span>
-                <strong>{Math.round(traceMeta.semanticAnomaly * 100)}%</strong>
-                <small>{Math.round(traceMeta.cohortAgreement * 100)}% trusted agreement</small>
-              </div>
-            ) : null}
+
+            {approval ? (
+              <span className="approved-note">
+                approved by {approval.actor} · execution gate {approval.executionGate} · side
+                effects executed: {String(approval.sideEffectsExecuted)}
+              </span>
+            ) : (
+              <button
+                className="btn btn-approve"
+                onClick={runApprove}
+                disabled={!canApprove || busy !== null}
+                title={
+                  canApprove
+                    ? "Approve the replayed plan"
+                    : "Resolve every quarantined memory first"
+                }
+              >
+                {busy === "approve" ? "approving…" : "Approve recovery plan"}
+              </button>
+            )}
           </div>
         </section>
+      ) : null}
 
-        <aside className="action-panel panel">
-          <div className="panel-heading">
-            <div>
-              <span className="eyebrow">03 / ACTION GATE</span>
-              <h2>What happens next</h2>
-            </div>
-            <span className={`gate-chip ${approved ? "safe" : replayed ? "waiting" : conflictVisible ? "blocked" : ""}`}>
-              {approved ? "APPROVED" : replayed ? "HUMAN GATE" : conflictVisible ? "BLOCKED" : "ARMED"}
-            </span>
-          </div>
-
-          {!replayed ? (
-            <>
-              <div className={`plan-card ${conflictVisible ? "has-conflict" : ""}`}>
-                <div className="plan-heading">
-                  <span>PROPOSED PLAN</span>
-                  <span>v1 / branch main</span>
-                </div>
-                <ol className="plan-list">
-                  <li>
-                    <span>01</span>
-                    <p>Freeze canary traffic at 10%</p>
-                    <em>reversible</em>
-                  </li>
-                  <li className={conflictVisible ? "unsafe" : ""}>
-                    <span>02</span>
-                    <p>Temporarily bypass JWT signature checks</p>
-                    <em>{conflictVisible ? "policy breach" : "unverified"}</em>
-                  </li>
-                  <li>
-                    <span>03</span>
-                    <p>Rotate gateway signing key</p>
-                    <em>approval</em>
-                  </li>
-                </ol>
-              </div>
-
-              {conflictVisible ? (
-                <div className="conflict-card" role="alert">
-                  <div className="conflict-icon">!</div>
-                  <div>
-                    <span className="eyebrow">MEMORY COLLISION</span>
-                    <strong>Unsafe recall changed the plan.</strong>
-                    <p>
-                      M-211 conflicts with signed policy P-07 and has no human
-                      provenance. No action was executed.
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="preflight-card">
-                  <div className="preflight-row">
-                    <span>Typed actions</span>
-                    <strong>3</strong>
-                  </div>
-                  <div className="preflight-row">
-                    <span>Irreversible actions</span>
-                    <strong>0</strong>
-                  </div>
-                  <div className="preflight-row">
-                    <span>Human approvals</span>
-                    <strong>1</strong>
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="resolved-stack">
-              <div className="branch-header">
-                <div>
-                  <span className="eyebrow">TRUSTED BRANCH</span>
-                  <strong>replay / 0427-safe</strong>
-                </div>
-                <span>4 actions</span>
-              </div>
-              <div className="safe-actions">
-                {safeActions.map(([number, action, guard, state]) => (
-                  <div className="safe-action" key={number}>
-                    <span>{number}</span>
-                    <div>
-                      <strong>{action}</strong>
-                      <small>{guard}</small>
-                    </div>
-                    <i
-                      className={state === "approval" && approved ? "ready" : state}
-                      aria-label={state === "approval" && !approved ? "Approval required" : "Ready"}
-                    >
-                      {state === "approval" ? (approved ? "✓" : "H") : "✓"}
-                    </i>
-                  </div>
-                ))}
-              </div>
-              <div className="replay-result">
-                <div>
-                  <span>UNSAFE ACTIONS</span>
-                  <strong><s>2</s> 0</strong>
-                </div>
-                <div>
-                  <span>PLAN CONFIDENCE</span>
-                  <strong>61 → 96</strong>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="action-footer">
-            <PhaseButton
-              phase={phase}
-              onRun={runTrace}
-              onQuarantine={quarantineAndReplay}
-              onApprove={approveSafePlan}
-              onReset={resetDemo}
-            />
-            <p>
-              {approved
-                ? "Human approval sealed. The action envelope is unlocked; no side effect is falsely claimed."
-                : replayed
-                  ? "The replay is verified, but Lambda remains locked until a human approves."
-                : "Lattice cannot execute side effects until memory provenance clears the action gate."}
-            </p>
-          </div>
-        </aside>
-      </section>
-
-      <footer className={`branch-console ${traceActive ? "is-tracing" : ""} ${replayed ? "is-replayed" : ""}`}>
-        <div className="branch-console-head">
-          <div>
-            <span className="eyebrow">04 / FORENSIC REPLAY</span>
-            <strong>Decision lineage</strong>
-          </div>
-          <code>AS OF SYSTEM TIME {shortHlc}</code>
-          <div className="temporal-badge">
-            <span>COCKROACH MVCC</span>
-            <strong>{traceMeta.temporalRows || "—"} rows reconstructed</strong>
-          </div>
-        </div>
-
-        <div className="branch-workspace">
-          <div className="git-lanes" aria-label="Decision branch history">
-            <div className="git-lane lane-main">
-              <span className="branch-label"><i /> main</span>
-              <div className="branch-track">
-                <div className="commit-node done"><i /><strong>signal</strong><small>09:42:18</small></div>
-                <div className={`commit-node ${traceActive ? "done" : ""}`}><i /><strong>recall</strong><small>5 memories</small></div>
-                <div className={`commit-node danger ${conflictVisible || replayed ? "done" : ""}`}><i /><strong>plan v1</strong><small>M-211 causal</small></div>
-                <div className={`commit-node stop ${conflictVisible || replayed ? "done" : ""}`}><i /><strong>blocked</strong><small>0 executed</small></div>
-              </div>
-            </div>
-
-            <div className="branch-fork" aria-hidden="true" />
-
-            <div className="git-lane lane-safe">
-              <span className="branch-label"><i /> replay/0427-safe</span>
-              <div className="branch-track">
-                <div className={`commit-node lime ${replayed ? "done" : ""}`}><i /><strong>quarantine</strong><small>SERIALIZABLE TXN</small></div>
-                <div className={`commit-node lime ${replayed ? "done" : ""}`}><i /><strong>time travel</strong><small>exact HLC</small></div>
-                <div className={`commit-node lime ${replayed ? "done" : ""}`}><i /><strong>plan v2</strong><small>Bedrock replay</small></div>
-                <div className={`commit-node approve ${approved ? "done" : replayed ? "waiting" : ""}`}><i /><strong>{approved ? "approved" : "human gate"}</strong><small>{approved ? "receipt sealed" : "required"}</small></div>
-              </div>
-            </div>
-          </div>
-
-          <div className="temporal-diff">
-            <article className={traceActive ? "active" : ""}>
-              <span>THEN / DECISION SNAPSHOT</span>
-              <strong>Plan v1 · 61%</strong>
-              <p>Five memories visible. Unsigned M-211 changes the proposed action.</p>
-              <code>{shortHlc}</code>
-            </article>
-            <div className="diff-arrow">→</div>
-            <article className={replayed ? "active safe" : ""}>
-              <span>NOW / TRUSTED BRANCH</span>
-              <strong>Plan v2 · 96%</strong>
-              <p>M-211 excluded. {traceMeta.replayPlanner === "amazon-bedrock-guarded" ? "Bedrock" : "Guarded"} replans from the historical snapshot.</p>
-              <code>{approved ? "human-approved" : replayed ? "approval pending" : "awaiting replay"}</code>
-            </article>
-          </div>
-        </div>
-      </footer>
+      {trace ? (
+        <footer className="foot">
+          <code>vector index {trace.database.vectorIndex}</code>
+          <code>{trace.database.isolation}</code>
+          <code>
+            skills {trace.skillReceipts.map((receipt) => receipt.name).join(" · ")}
+          </code>
+          <span className="spacer" />
+          {lineage ? (
+            <code className="dim">lineage from {lineage.source.tables.length} tables</code>
+          ) : null}
+          <button className="btn btn-ghost" onClick={runTrace} disabled={busy !== null}>
+            new trace
+          </button>
+        </footer>
+      ) : null}
     </main>
   );
 }

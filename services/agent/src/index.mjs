@@ -11,6 +11,7 @@ import {
   approveRun,
   createTraceRun,
   getIncident,
+  getLineage,
   health,
   quarantineAndBranch,
   reconstructDecisionContext,
@@ -19,6 +20,8 @@ import {
 import { loadCockroachSkillContext } from "./skills.mjs";
 
 const WORKSPACE_ID = "demo-acme-ops";
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class InvalidJsonError extends Error {}
 
@@ -246,6 +249,15 @@ export async function handler(event) {
           evidenceStore: process.env.EVIDENCE_BUCKET ? "s3-versioned" : "not-configured",
         },
       });
+    }
+    if (method === "GET" && path.endsWith("/lineage")) {
+      const runId = event.queryStringParameters?.runId;
+      if (!runId || !UUID_PATTERN.test(runId)) {
+        return response(400, { error: "invalid_run_id" });
+      }
+      const lineage = await getLineage(WORKSPACE_ID, runId);
+      if (!lineage) return response(404, { error: "run_not_found" });
+      return response(200, lineage);
     }
     if (method === "POST" && path.endsWith("/trace")) return await trace(event);
     if (method === "POST" && path.endsWith("/quarantine")) return await quarantine(event);

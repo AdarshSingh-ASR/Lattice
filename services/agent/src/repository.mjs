@@ -29,7 +29,7 @@ export async function getIncident(workspaceId, incidentId) {
 export async function retrieveMemories(workspaceId, embedding, limit = 5) {
   const result = await getPool().query(
     `SELECT id, kind, title, content, trust_score, provenance, signature_status,
-            status, supersedes_id, embedding::STRING AS embedding_literal,
+            status, supersedes_id, created_at, embedding::STRING AS embedding_literal,
             1 - (embedding <=> $2::VECTOR) AS similarity
        FROM memories
       WHERE workspace_id = $1
@@ -77,12 +77,161 @@ export async function retrieveMemories(workspaceId, embedding, limit = 5) {
         signatureStatus: row.signature_status,
         status: row.status,
         supersedesId: row.supersedes_id,
+        createdAt: row.created_at,
         similarity,
         cohortAgreement,
         semanticAnomaly,
       };
     }),
   );
+}
+
+/**
+ * Returns the raw provenance rows CockroachDB holds for a single agent run.
+ * Every array here is a direct table read; the UI renders these rows as the
+ * memory timeline instead of keeping its own copy of the story.
+ */
+export async function getLineage(workspaceId, runId) {
+  const pool = getPool();
+
+  const run = await pool.query(
+    `SELECT id, incident_id, phase, branch_name, plan, conflict_count,
+            skill_receipts, decision_hlc, decision_wall_time,
+            created_at, resolved_at, approved_at
+       FROM agent_runs
+      WHERE workspace_id = $1 AND id = $2`,
+    [workspaceId, runId],
+  );
+  if (!run.rowCount) return null;
+
+  const [reads, events, interventions, approvals, journal] = await Promise.all([
+    pool.query(
+      `SELECT r.memory_id, r.rank, r.similarity, r.decision, r.guardrail_result,
+              r.cohort_agreement, r.semantic_anomaly, r.created_at,
+              m.title, m.kind, m.content, m.trust_score, m.signature_status,
+              m.provenance, m.status, m.supersedes_id,
+              m.created_at AS memory_created_at
+         FROM memory_reads AS r
+         JOIN memories AS m
+           ON m.workspace_id = r.workspace_id AND m.id = r.memory_id
+        WHERE r.workspace_id = $1 AND r.run_id = $2
+        ORDER BY r.rank`,
+      [workspaceId, runId],
+    ),
+    pool.query(
+      `SELECT id, memory_id, event_type, actor, reason, evidence_hash,
+              run_id, branch_name, created_at
+         FROM memory_events
+        WHERE workspace_id = $1
+          AND memory_id IN (
+            SELECT memory_id FROM memory_reads
+             WHERE workspace_id = $1 AND run_id = $2
+          )
+        ORDER BY created_at`,
+      [workspaceId, runId],
+    ),
+    pool.query(
+      `SELECT memory_id, state, actor, reason, evidence_hash, created_at
+         FROM memory_interventions
+        WHERE workspace_id = $1 AND run_id = $2
+        ORDER BY created_at`,
+      [workspaceId, runId],
+    ),
+    pool.query(
+      `SELECT decision, actor, plan_hash, created_at
+         FROM human_approvals
+        WHERE workspace_id = $1 AND run_id = $2`,
+      [workspaceId, runId],
+    ),
+    pool.query(
+      `SELECT action_key, state, input_hash, created_at, completed_at
+         FROM action_journal
+        WHERE workspace_id = $1 AND run_id = $2
+        ORDER BY created_at`,
+      [workspaceId, runId],
+    ),
+  ]);
+
+  return {
+    run: {
+      id: run.rows[0].id,
+      incidentId: run.rows[0].incident_id,
+      phase: run.rows[0].phase,
+      branch: run.rows[0].branch_name,
+      plan: run.rows[0].plan,
+      conflictCount: Number(run.rows[0].conflict_count),
+      skillReceipts: run.rows[0].skill_receipts,
+      decisionHlc: run.rows[0].decision_hlc,
+      decisionWallTime: run.rows[0].decision_wall_time,
+      createdAt: run.rows[0].created_at,
+      resolvedAt: run.rows[0].resolved_at,
+      approvedAt: run.rows[0].approved_at,
+    },
+    reads: reads.rows.map((row) => ({
+      memoryId: row.memory_id,
+      rank: Number(row.rank),
+      similarity: Number(row.similarity),
+      decision: row.decision,
+      guardrail: row.guardrail_result,
+      cohortAgreement: row.cohort_agreement === null ? null : Number(row.cohort_agreement),
+      semanticAnomaly: row.semantic_anomaly === null ? null : Number(row.semantic_anomaly),
+      readAt: row.created_at,
+      title: row.title,
+      kind: row.kind,
+      content: row.content,
+      trustScore: Number(row.trust_score),
+      signatureStatus: row.signature_status,
+      provenance: row.provenance,
+      status: row.status,
+      supersedesId: row.supersedes_id,
+      memoryCreatedAt: row.memory_created_at,
+    })),
+    events: events.rows.map((row) => ({
+      id: row.id,
+      memoryId: row.memory_id,
+      eventType: row.event_type,
+      actor: row.actor,
+      reason: row.reason,
+      evidenceHash: row.evidence_hash,
+      runId: row.run_id,
+      branch: row.branch_name,
+      createdAt: row.created_at,
+      fromThisRun: row.run_id === runId,
+    })),
+    interventions: interventions.rows.map((row) => ({
+      memoryId: row.memory_id,
+      state: row.state,
+      actor: row.actor,
+      reason: row.reason,
+      evidenceHash: row.evidence_hash,
+      createdAt: row.created_at,
+    })),
+    approvals: approvals.rows.map((row) => ({
+      decision: row.decision,
+      actor: row.actor,
+      planHash: row.plan_hash,
+      createdAt: row.created_at,
+    })),
+    journal: journal.rows.map((row) => ({
+      actionKey: row.action_key,
+      state: row.state,
+      inputHash: row.input_hash,
+      createdAt: row.created_at,
+      completedAt: row.completed_at,
+    })),
+    source: {
+      engine: "cockroachdb",
+      tables: [
+        "agent_runs",
+        "memory_reads",
+        "memories",
+        "memory_events",
+        "memory_interventions",
+        "human_approvals",
+        "action_journal",
+      ],
+    },
+  };
 }
 
 export async function createTraceRun({
@@ -272,11 +421,12 @@ export async function quarantineAndBranch({
       throw new Error(`Memory ${memoryId} was not found in workspace ${workspaceId}.`);
     }
 
-    await client.query(
+    const quarantineEvent = await client.query(
       `INSERT INTO memory_events
         (workspace_id, id, memory_id, event_type, actor, reason, evidence_hash,
          run_id, branch_name)
-       VALUES ($1, $2, $3, 'quarantined', 'lattice-guardian', $4, $5, $6, $7)`,
+       VALUES ($1, $2, $3, 'quarantined', 'lattice-guardian', $4, $5, $6, $7)
+       RETURNING created_at`,
       [
         workspaceId,
         eventId,
@@ -317,6 +467,9 @@ export async function quarantineAndBranch({
       plan: safePlan,
       quarantinedMemoryId: memoryId,
       eventId,
+      // Wall time of the quarantine as recorded by CockroachDB, so the replay
+      // header can cite a database timestamp rather than a client clock.
+      quarantinedAt: quarantineEvent.rows[0].created_at,
       inputHash,
       temporalProof,
       replayPlanner,

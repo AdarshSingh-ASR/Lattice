@@ -90,6 +90,11 @@ export function buildSafePlan(memories, modelPlan = null) {
           title: String(action.title ?? "Review recovery step"),
           mode: String(action.mode ?? "read-only"),
           requiresApproval: Boolean(action.requiresApproval),
+          // Only keep citations that survived quarantine, so the UI can draw
+          // memory -> action edges without inventing a source.
+          memoryIds: Array.isArray(action.memoryIds)
+            ? action.memoryIds.map(String).filter((id) => sourceIds.includes(id))
+            : [],
         }))
     : [];
 
