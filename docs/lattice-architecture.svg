@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Lattice architecture</title>
+  <desc id="desc">Lattice control room connects through Amazon API Gateway and AWS Lambda to Amazon Bedrock, CockroachDB Cloud on AWS, Amazon S3, CockroachDB Agent Skills, and the ccloud CLI.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#071018"/><stop offset="1" stop-color="#0d1721"/></linearGradient>
+    <linearGradient id="cockroach" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1a3150"/><stop offset="1" stop-color="#0d4a52"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000" flood-opacity=".32"/></filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#7f9db0"/></marker>
+    <style>
+      .label{font-family:Inter,Arial,sans-serif;fill:#f4f8fa;font-size:22px;font-weight:700}.sub{font-family:Inter,Arial,sans-serif;fill:#a9bac7;font-size:16px}.small{font-family:Inter,Arial,sans-serif;fill:#a9bac7;font-size:15px}.card{fill:#111e29;stroke:#2c4253;stroke-width:2}.aws{fill:#1a2632;stroke:#ffad33;stroke-width:2}.line{stroke:#7f9db0;stroke-width:3;fill:none;marker-end:url(#arrow)}.dash{stroke:#587284;stroke-width:2;stroke-dasharray:8 9;fill:none;marker-end:url(#arrow)}.pill{font-family:Inter,Arial,sans-serif;fill:#65e6bd;font-size:14px;font-weight:700;letter-spacing:1.8px}
+    </style>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#bg)"/>
+  <text x="90" y="86" class="label" font-size="38">LATTICE</text>
+  <text x="90" y="119" class="sub" font-size="20">Forensic control plane for AI agent memory</text>
+  <line x1="90" y1="150" x2="1510" y2="150" stroke="#294052"/>
+
+  <g filter="url(#shadow)">
+    <rect x="90" y="280" width="230" height="120" rx="14" class="card"/>
+    <text x="118" y="326" class="label">Lattice</text><text x="118" y="354" class="sub">Next.js control room</text><text x="118" y="378" class="small">trace · inspect · approve</text>
+    <rect x="405" y="280" width="230" height="120" rx="14" class="aws"/>
+    <text x="433" y="326" class="label">API Gateway</text><text x="433" y="354" class="sub">public agent API</text>
+    <rect x="720" y="260" width="270" height="160" rx="14" class="aws"/>
+    <text x="748" y="312" class="label">AWS Lambda</text><text x="748" y="340" class="sub">Lattice agent boundary</text><text x="748" y="370" class="small">trace · guardrail · replay</text><text x="748" y="394" class="small">quarantine · approval</text>
+  </g>
+  <path d="M320 340 H405" class="line"/><path d="M635 340 H720" class="line"/>
+
+  <g filter="url(#shadow)">
+    <rect x="1140" y="195" width="320" height="125" rx="14" class="aws"/>
+    <text x="1170" y="243" class="label">Amazon Bedrock</text><text x="1170" y="271" class="sub">Nova planner + Titan embeddings</text><text x="1170" y="295" class="small">initial plan and safe replay plan</text>
+    <rect x="1140" y="420" width="320" height="125" rx="14" class="aws"/>
+    <text x="1170" y="468" class="label">Amazon S3</text><text x="1170" y="496" class="sub">versioned evidence receipts</text><text x="1170" y="520" class="small">hashed quarantine and approval proof</text>
+  </g>
+  <path d="M990 300 C1050 300,1065 257,1140 257" class="line"/><path d="M990 385 C1055 405,1065 482,1140 482" class="line"/>
+
+  <g filter="url(#shadow)">
+    <rect x="590" y="585" width="420" height="210" rx="16" fill="url(#cockroach)" stroke="#49d6c6" stroke-width="2"/>
+    <text x="624" y="637" class="label">CockroachDB Cloud on AWS</text><text x="624" y="668" class="sub">agent memory and decision system of record</text>
+    <line x1="624" y1="692" x2="976" y2="692" stroke="#3e7380"/>
+    <text x="624" y="725" class="small">Distributed vector index · vector cohort anomaly</text><text x="624" y="752" class="small">MVCC AS OF SYSTEM TIME · exact decision HLC</text><text x="624" y="779" class="small">Serializable quarantine · lineage · approval</text>
+  </g>
+  <path d="M855 420 V585" class="line"/>
+
+  <g filter="url(#shadow)">
+    <rect x="90" y="650" width="330" height="115" rx="14" class="card"/>
+    <text x="118" y="696" class="label">Agent Skills Repo</text><text x="118" y="724" class="sub">transactions · privileges · health</text>
+    <rect x="1180" y="650" width="280" height="115" rx="14" class="card"/>
+    <text x="1208" y="696" class="label">ccloud CLI</text><text x="1208" y="724" class="sub">cluster health + operations</text>
+  </g>
+  <path d="M420 707 C510 707,560 460,720 405" class="dash"/><path d="M1180 707 H1010" class="dash"/>
+
+  <rect x="90" y="870" width="1420" height="1" fill="#294052"/>
+  <circle cx="100" cy="916" r="7" fill="#49d6c6"/><text x="118" y="922" class="pill">LIVE DECISION PATH</text>
+  <text x="380" y="922" class="sub">retrieve memory → verify provenance → quarantine unsafe evidence → replay historical state → human approval</text>
+</svg>
