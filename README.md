@@ -15,7 +15,7 @@ CockroachDB and AWS.
 
 **[Live demo](https://lattice-memory-plane.finora-asr.workers.dev/)** ·
 **[Agent health](https://x8vncko1s0.execute-api.us-east-1.amazonaws.com/health)** ·
-**[Demo video](https://youtu.be/Ulx7H7r7owI?si=7sHxk19vMCha6DHO)** ·
+**[Demo video](https://youtu.be/DhyJLhXpFXc?si=W2eglfa1fTEdux46)** ·
 **[Devpost challenge](https://cockroachdb-ai.devpost.com/)**
 
 ![Lattice — memory that can prove itself](./public/og.png)
