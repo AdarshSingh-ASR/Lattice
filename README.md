@@ -8,14 +8,14 @@ A flight recorder and action gate for incident-response agents, built on
 CockroachDB and AWS.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-3fd39b.svg)](./LICENSE)
-[![Live demo](https://img.shields.io/badge/demo-live-3fd39b)](https://lattice-memory-plane.stitchboatimmigratio.chatgpt.site)
+[![Live demo](https://img.shields.io/badge/demo-live-3fd39b)](https://lattice-memory-plane.finora-asr.workers.dev/)
 [![Agent health](https://img.shields.io/badge/agent-health%20endpoint-4a9eff)](https://x8vncko1s0.execute-api.us-east-1.amazonaws.com/health)
 [![CockroachDB](https://img.shields.io/badge/CockroachDB-v26.2.5-6933FF)](https://www.cockroachlabs.com/)
 [![AWS](https://img.shields.io/badge/AWS-Lambda%20·%20Bedrock%20·%20S3-FF9900)](https://aws.amazon.com/)
 
-**[Live demo](https://lattice-memory-plane.stitchboatimmigratio.chatgpt.site)** ·
+**[Live demo](https://lattice-memory-plane.finora-asr.workers.dev/)** ·
 **[Agent health](https://x8vncko1s0.execute-api.us-east-1.amazonaws.com/health)** ·
-**[Demo video](#)** ·
+**[Demo video](https://youtu.be/Ulx7H7r7owI?si=7sHxk19vMCha6DHO)** ·
 **[Devpost challenge](https://cockroachdb-ai.devpost.com/)**
 
 ![Lattice — memory that can prove itself](./public/og.png)
@@ -92,23 +92,6 @@ curl -s -X POST https://x8vncko1s0.execute-api.us-east-1.amazonaws.com/approve -
 ```
 
 Note `"sideEffectsExecuted": false`. Lattice never claims an action ran.
-
----
-
-## Submission requirements
-
-| Requirement | Status | Evidence |
-| --- | --- | --- |
-| Public repository, all source code | ✅ | This repository |
-| Open source license, detectable in About | ✅ | MIT — [`LICENSE`](./LICENSE), detected by GitHub |
-| Clear README + setup and run instructions | ✅ | [Run locally](#run-locally), [Deploy](#deploy-to-your-own-aws-account) |
-| Dependencies and example configuration | ✅ | [`package.json`](./package.json), [`.env.example`](./services/agent/.env.example) |
-| Example dataset | ✅ | [`scripts/seed.mjs`](./services/agent/scripts/seed.mjs) |
-| Functional demo URL | ✅ | [lattice-memory-plane…chatgpt.site](https://lattice-memory-plane.stitchboatimmigratio.chatgpt.site) |
-| ≥ 2 CockroachDB tools, with usage described | ✅ (3 + MVCC) | [CockroachDB tools](#cockroachdb-tools) |
-| ≥ 1 AWS service, with usage described | ✅ (4) | [AWS services](#aws-services) |
-| Architecture diagram | ✅ | [Architecture](#architecture) |
-| Demo video under 3 minutes | ⬜ | Add link before submitting |
 
 ---
 
